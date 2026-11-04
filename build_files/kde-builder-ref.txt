@@ -1,0 +1,12 @@
+# Which kde-builder to build with: a commit, tag or branch, or master to
+# track upstream. It is cloned at build time, so an upstream commit reaches
+# this build with nothing to show for it in this repo. Pin one here when
+# upstream breaks.
+#
+# Anything older than 01fba8a needs build-kde.py changed back to
+# --refresh-build, which --clean-build replaced.
+#
+# Every build records the commit it resolved in meta/kde-builder-commit.txt,
+# so the last good one is recoverable from an artifact. KDE_BUILDER_REF and
+# the kde_builder_ref workflow input override this file.
+master

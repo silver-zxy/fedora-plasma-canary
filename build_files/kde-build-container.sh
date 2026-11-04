@@ -1,0 +1,143 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
+# SPDX-FileCopyrightText: 2026 silver-zyx <352581001+silver-zxy@users.noreply.github.com>
+#
+# Runs inside the transient compile container, started from the same pinned
+# Kinoite rawhide the final image is built on. Builds KDE with kde-builder into
+# one install tree per project, then package-kde.py turns those into RPMs.
+# Nothing from this container ships except /work/rpms.
+set -euo pipefail
+
+export HOME=/root
+export KDE_MASTER_INSTALL_DESTDIR="/work/tree/install"
+LOG_DIR="/work/logs"
+# /work outlives the container on local reruns; base-image-digest.txt in it is
+# written by the workflow and must survive.
+rm -rf /work/tree /work/rpms /work/meta /work/rpmbuild
+mkdir -p "$KDE_MASTER_INSTALL_DESTDIR" "$LOG_DIR" /work/meta
+rm -rf /root
+mkdir -p /root/.config
+
+log()   { echo -e "\n\033[1;34m==> $1\033[0m\n" | tee -a "$LOG_DIR/build.log"; }
+error() { echo -e "\n\033[1;31mERROR: $1\033[0m\n" | tee -a "$LOG_DIR/build.log" >&2; }
+die()   { error "$1"; exit 1; }
+
+# Block all 32-bit packages globally.
+cat >> /etc/dnf/dnf.conf << 'EOF'
+
+[main]
+excludepkgs=*.i686
+EOF
+
+# The base image carries whatever dnf cached when Kinoite was composed, and
+# rawhide moves every day. Stale repodata makes dnf ask the mirrors for files
+# from a compose that has since been rotated away: every mirror answers 404 on
+# the primary.xml.zck named in the cached repomd, and the repo ends up
+# unusable. Fedora's dnf.conf ships skip_if_unavailable=True, so that is not an
+# error, it is a repo that quietly is not there, and every --skip-unavailable
+# install after it drops packages without a word.
+log "Refreshing repository metadata..."
+dnf5 clean all
+dnf5 makecache --refresh || die "Could not refresh repository metadata. Every \
+package install after this would silently install nothing."
+
+# rpm-build, redhat-rpm-config and the generator packages are what
+# package-kde.py needs: %dist, %_isa, and the cmake()/python dependency
+# generators. readelf (binutils) finds Qt private API use, getcap (libcap)
+# carries file capabilities into the RPMs.
+log "Installing build dependencies..."
+dnf5 install -y --skip-broken --skip-unavailable --allowerasing \
+    sudo git ninja-build rsync openssh-clients ccache \
+    python3-yaml python3-requests python3-pip python3-setproctitle python3-jeepney ruby \
+    cmake rpm-build redhat-rpm-config python3-rpm-generators cmake-rpm-macros \
+    binutils libcap \
+    clang-devel kf6-kirigami-devel \
+    kf6-kirigami-addons-devel clang-tools-extra git-clang-format jq \
+    PackageKit-glib-devel \
+    'dnf-command(repoquery)' \
+    || error "Some build deps failed to install"
+
+dnf5 group install development-tools -y || error "development-tools failed to install"
+
+for tool in ccache git ruby rpmbuild readelf; do
+    command -v "$tool" > /dev/null || die "$tool is missing after installing build dependencies."
+done
+
+log "Configuring ccache..."
+export CCACHE_DIR=/ccache
+export CCACHE_MAXSIZE=5G
+ccache --set-config=cache_dir=/ccache
+ccache --set-config=max_size=5G
+ccache --set-config=compression=true
+ccache -z
+
+# Cloned from upstream at build time, so a commit on kde-builder master reaches
+# this build with nothing to show for it in the repo. kde-builder-ref.txt is how
+# that gets pinned when upstream breaks; see the file for why it exists.
+REF="${KDE_BUILDER_REF:-}"
+if [ -z "$REF" ] && [ -f /ctx/kde-builder-ref.txt ]; then
+    REF=$(sed 's/#.*//' /ctx/kde-builder-ref.txt | tr -d '[:space:]')
+fi
+REF="${REF:-master}"
+
+log "Installing kde-builder (${REF})..."
+git clone https://invent.kde.org/sdk/kde-builder.git /usr/share/kde-builder
+git -C /usr/share/kde-builder checkout --quiet "$REF" \
+    || die "kde-builder has no ref '${REF}'. Fix build_files/kde-builder-ref.txt."
+ln -sf /usr/share/kde-builder/kde-builder /usr/bin/kde-builder
+
+COMMIT=$(git -C /usr/share/kde-builder rev-parse HEAD)
+log "kde-builder ${REF} is ${COMMIT}"
+printf '%s %s\n' "$REF" "$COMMIT" > /work/meta/kde-builder-commit.txt
+
+log "Installing KDE build dependencies..."
+python3 /ctx/install-kde-deps.py 2>&1 | tee -a "$LOG_DIR/deps.log" \
+    || die "install-kde-deps.py failed, see deps.log."
+
+log "Installing ninja hijack..."
+mv /usr/bin/ninja /usr/bin/ninja.orig
+cp /ctx/ninja-hijack.rb /usr/bin/ninja
+chmod +x /usr/bin/ninja
+
+# The workflow's timeout covers the whole container. Stop kde-builder early
+# enough that packaging always fits inside it: a build that finishes with a
+# minute to spare is no use if the RPMs never get written.
+BUILD_TIMEOUT=()
+if [ -n "${BUILD_DEADLINE:-}" ]; then
+    RESERVE="${PACKAGE_RESERVE:-1800}"
+    BUDGET=$(( BUILD_DEADLINE - $(date +%s) - RESERVE ))
+    [ "$BUDGET" -gt 300 ] || die "Only ${BUDGET}s left before the packaging reserve, not starting a build."
+    log "Build budget: $(( BUDGET / 60 ))m, keeping $(( RESERVE / 60 ))m for packaging."
+    BUILD_TIMEOUT=(timeout --signal=TERM --kill-after=60 "${BUDGET}s")
+fi
+
+log "Building KDE..."
+set +e
+"${BUILD_TIMEOUT[@]}" python3 /ctx/build-kde.py 2>&1 | tee -a "$LOG_DIR/kde-build.log"
+rc=${PIPESTATUS[0]}
+set -e
+
+# Collect kde-builder per-project logs regardless of outcome
+if [ -d /builder/log ]; then
+    log "Collecting kde-builder logs..."
+    cp -r /builder/log "$LOG_DIR/kde-builder-logs"
+fi
+
+if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    error "Build stopped to leave time for packaging. The warm ccache is still saved, rerun to continue from it."
+    exit 124
+elif [ "$rc" -ne 0 ]; then
+    die "build-kde.py failed ($rc). Logs at $LOG_DIR"
+fi
+
+# One RPM per project. The kde-canary metapackage that ties them to Fedora is
+# built by the release job, on a pristine copy of the base.
+log "Packaging..."
+python3 /ctx/package-kde.py projects 2>&1 | tee -a "$LOG_DIR/package.log" \
+    || die "package-kde.py failed, see package.log and $LOG_DIR/rpmbuild/."
+
+log "Project packages: $(find /work/rpms -name '*.rpm' | wc -l), $(du -sh /work/rpms | cut -f1)"
+log "ccache stats:"
+ccache -s
+
+log "Done."
