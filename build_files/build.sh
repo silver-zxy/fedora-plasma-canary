@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
-# SPDX-FileCopyrightText: 2026 silver-zyx <352581001+silver-zxy@users.noreply.github.com>
+# SPDX-FileCopyrightText: 2026 silver-zxy <352581001+silver-zxy@users.noreply.github.com>
 #
 # Runs inside the final image build, on top of the same pinned Kinoite rawhide
 # the KDE RPMs were compiled on. Kinoite already is the desktop platform, so

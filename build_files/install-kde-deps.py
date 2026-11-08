@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
-# SPDX-FileCopyrightText: 2026 silver-zyx <352581001+silver-zxy@users.noreply.github.com>
+# SPDX-FileCopyrightText: 2026 silver-zxy <352581001+silver-zxy@users.noreply.github.com>
 """Install what KDE needs to compile, and record the build order.
 
 Runs once in kde-build-container.sh, before kde-builder. That is all it does.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
-# SPDX-FileCopyrightText: 2026 silver-zyx <352581001+silver-zxy@users.noreply.github.com>
+# SPDX-FileCopyrightText: 2026 silver-zxy <352581001+silver-zxy@users.noreply.github.com>
 #
 # Runs on the developer's machine rather than in the build container, so it
 # uses env rather than a hardcoded /bin/bash: NixOS has no /bin/bash.
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 IMAGE="${1:-localhost/fedora-plasma-canary:latest}"
-KINOITE="${KINOITE_IMAGE:-ghcr.io/silver-zyx/fedora-plasma-canary-kinoite:latest}"
+KINOITE="${KINOITE_IMAGE:-ghcr.io/silver-zxy/fedora-plasma-canary-kinoite:latest}"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT

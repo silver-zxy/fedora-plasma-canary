@@ -1,4 +1,4 @@
-ARG BASE_IMAGE="ghcr.io/silver-zyx/fedora-plasma-canary-kinoite:latest"
+ARG BASE_IMAGE="ghcr.io/silver-zxy/fedora-plasma-canary-kinoite:latest"
 
 FROM scratch AS ctx
 COPY build_files /
